@@ -126,7 +126,7 @@ export default function UsersPage({ users: initial }: Props) {
             </div>
             <div>
               <label className={labelCls}>Role</label>
-              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} disabled={!!editId} className={inputCls}>
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className={inputCls}>
                 <option value="CASHIER">Cashier</option>
                 <option value="ORGANIZATION_ADMIN">Organization Admin</option>
               </select>

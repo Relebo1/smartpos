@@ -7,7 +7,7 @@ import Pagination from "@/components/Pagination";
 type User = { id: number; name: string; email: string; role: string; createdAt: string };
 type Props = { users: User[]; orgId: number; orgName: string };
 
-const EMPTY = { name: "", email: "", password: "" };
+const EMPTY = { name: "", email: "", password: "", role: "CASHIER" };
 const inputCls = "w-full border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-400 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
 const labelCls = "block text-sm font-medium text-gray-700 dark:text-slate-200 mb-1";
 
@@ -23,7 +23,7 @@ export default function PlatformOrgUsersPage({ users: initial, orgId, orgName }:
   const [pageSize, setPageSize] = useState(10);
 
   function openAdd() { setEditId(null); setForm(EMPTY); setError(""); setShowForm(true); }
-  function openEdit(u: User) { setEditId(u.id); setForm({ name: u.name, email: u.email, password: "" }); setError(""); setShowForm(true); }
+  function openEdit(u: User) { setEditId(u.id); setForm({ name: u.name, email: u.email, password: "", role: u.role }); setError(""); setShowForm(true); }
   function cancelForm() { setShowForm(false); setEditId(null); setForm(EMPTY); setError(""); }
 
   async function handleSubmit(e: FormEvent) {
@@ -71,6 +71,13 @@ export default function PlatformOrgUsersPage({ users: initial, orgId, orgName }:
             <div>
               <label className={labelCls}>Email</label>
               <input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={inputCls} placeholder="john@example.com" />
+            </div>
+            <div>
+              <label className={labelCls}>Role</label>
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className={inputCls}>
+                <option value="CASHIER">Cashier</option>
+                <option value="ORGANIZATION_ADMIN">Organization Admin</option>
+              </select>
             </div>
             <div>
               <label className={labelCls}>

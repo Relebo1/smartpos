@@ -39,7 +39,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!name || !email || !password) return res.status(400).json({ error: "All fields are required" });
 
     const allowedRoles = ["ORGANIZATION_ADMIN", "CASHIER"];
-    const assignedRole = allowedRoles.includes(role) ? role : "CASHIER";
+    if (!allowedRoles.includes(role))
+      return res.status(400).json({ error: "Invalid role" });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(400).json({ error: "Email already exists" });
@@ -49,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         name,
         email,
         password: await bcrypt.hash(password, 10),
-        role: assignedRole,
+        role,
         organizationId: orgId,
       },
       select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },

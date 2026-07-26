@@ -23,8 +23,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: "Forbidden" });
 
   if (req.method === "PUT") {
-    const { name, email, password } = req.body;
+    const { name, email, password, role } = req.body;
+    const allowedRoles = ["ORGANIZATION_ADMIN", "CASHIER"];
+    if (!allowedRoles.includes(role))
+      return res.status(400).json({ error: "Invalid role" });
     const data: Record<string, unknown> = { name, email };
+    data.role = role;
     if (password) data.password = await bcrypt.hash(password, 10);
     const updated = await prisma.user.update({
       where: { id },
