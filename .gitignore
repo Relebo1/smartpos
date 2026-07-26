@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# build
+dist/
+
+# env
+.env
+.env*.local
+
+# prisma
+prisma/migrations/
+
+# certs (sensitive)
+certificates/
+
+# uploads
+public/uploads/
+
+# misc
+.DS_Store
+*.pem
+tsconfig.tsbuildinfo
