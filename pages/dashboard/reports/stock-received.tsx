@@ -1,4 +1,4 @@
-import { ReportPage, StatCard, fmt, makeGSSP } from "./_reportPage";
+import { ReportPage, StatCard, fmt, makeGSSP } from "@/components/_reportPage";
 
 export default function StockReceived({ orgName }: { orgName: string }) {
   return (

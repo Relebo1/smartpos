@@ -5,7 +5,7 @@
  */
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../api/auth/[...nextauth]";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { useRouter } from "next/router";
 import { useState, useEffect } from "react";
 import { ArrowLeft, RefreshCw, ShieldCheck } from "lucide-react";

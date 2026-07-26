@@ -1,4 +1,4 @@
-import { ReportPage, StatCard, ReportTable, fmt, pct, makeGSSP } from "./_reportPage";
+import { ReportPage, StatCard, ReportTable, fmt, pct, makeGSSP } from "@/components/_reportPage";
 
 export default function SalesSummary({ orgName }: { orgName: string }) {
   return (

@@ -1,4 +1,4 @@
-import { ReportPage, StatCard, ReportTable, makeGSSP } from "./_reportPage";
+import { ReportPage, StatCard, ReportTable, makeGSSP } from "@/components/_reportPage";
 
 export default function LowStock({ orgName }: { orgName: string }) {
   return (

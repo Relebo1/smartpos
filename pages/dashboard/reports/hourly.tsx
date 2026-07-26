@@ -1,4 +1,4 @@
-import { ReportPage, StatCard, ReportTable, fmt, makeGSSP } from "./_reportPage";
+import { ReportPage, StatCard, ReportTable, fmt, makeGSSP } from "@/components/_reportPage";
 
 function hourLabel(h: number) {
   const ampm = h < 12 ? "AM" : "PM";

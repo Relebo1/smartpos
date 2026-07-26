@@ -1,4 +1,4 @@
-import { ReportPage, StatCard, ReportTable, makeGSSP } from "./_reportPage";
+import { ReportPage, StatCard, ReportTable, makeGSSP } from "@/components/_reportPage";
 
 export default function OutOfStock({ orgName }: { orgName: string }) {
   return (
