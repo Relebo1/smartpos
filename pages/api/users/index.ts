@@ -53,6 +53,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         organizationId: orgId,
       },
       select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },
+    });
+    return res.status(201).json(user);
   }
 
   res.setHeader("Allow", ["GET", "POST"]);
