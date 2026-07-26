@@ -159,6 +159,14 @@ model Payment {
   @@index([saleId], map: "Payment_saleId_fkey")
 }
 
+model ScannerSession {
+  token     String   @id
+  orgId     Int
+  barcode   String?
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+}
+
 enum OrgStatus {
   ACTIVE
   SUSPENDED

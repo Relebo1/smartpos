@@ -12,6 +12,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const orgId: number = session.user.organizationId ?? Number(req.body?.organizationId);
   if (!orgId) return res.status(400).json({ error: "organizationId is required" });
 
-  const token = createSession(orgId);
+  const token = await createSession(orgId);
   return res.status(201).json({ token });
 }

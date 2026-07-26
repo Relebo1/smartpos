@@ -1,48 +1,39 @@
-export type ScannerSession = {
-  orgId: number;
-  barcode: string | null;
-  expiresAt: number;
-};
+import { prisma } from "@/lib/prisma";
 
-// Module-level map — persists across requests within the same Node process.
-// Suitable for single-server deployments (no Redis needed).
-const sessions = new Map<string, ScannerSession>();
+const TTL_MS = 10 * 60 * 1000;
 
-const TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-export function createSession(orgId: number): string {
-  purgeExpired();
+export async function createSession(orgId: number): Promise<string> {
   const token = crypto.randomUUID();
-  sessions.set(token, { orgId, barcode: null, expiresAt: Date.now() + TTL_MS });
+  await prisma.scannerSession.create({
+    data: { token, orgId, expiresAt: new Date(Date.now() + TTL_MS) },
+  });
   return token;
 }
 
-export function getSession(token: string): ScannerSession | null {
-  const s = sessions.get(token);
+export async function getSession(token: string) {
+  const s = await prisma.scannerSession.findUnique({ where: { token } });
   if (!s) return null;
-  if (Date.now() > s.expiresAt) { sessions.delete(token); return null; }
-  s.expiresAt = Date.now() + TTL_MS; // sliding expiry on activity
-  return s;
+  if (Date.now() > s.expiresAt.getTime()) {
+    await prisma.scannerSession.delete({ where: { token } });
+    return null;
+  }
+  // sliding expiry
+  return prisma.scannerSession.update({
+    where: { token },
+    data: { expiresAt: new Date(Date.now() + TTL_MS) },
+  });
 }
 
-export function pushBarcode(token: string, barcode: string): boolean {
-  const s = getSession(token);
+export async function pushBarcode(token: string, barcode: string): Promise<boolean> {
+  const s = await getSession(token);
   if (!s) return false;
-  s.barcode = barcode;
+  await prisma.scannerSession.update({ where: { token }, data: { barcode } });
   return true;
 }
 
-export function consumeBarcode(token: string): string | null {
-  const s = getSession(token);
+export async function consumeBarcode(token: string): Promise<string | null> {
+  const s = await getSession(token);
   if (!s || !s.barcode) return null;
-  const barcode = s.barcode;
-  s.barcode = null;
-  return barcode;
-}
-
-function purgeExpired() {
-  const now = Date.now();
-  for (const [k, v] of sessions) {
-    if (now > v.expiresAt) sessions.delete(k);
-  }
+  await prisma.scannerSession.update({ where: { token }, data: { barcode: null } });
+  return s.barcode;
 }
