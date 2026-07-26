@@ -106,7 +106,28 @@ export default function Layout({ children }: { children: ReactNode }) {
   }, []);
 
   const navItems = isPlatform ? PLATFORM_NAV : ORG_NAV;
-  const visibleNav = navItems.filter((item) => item.roles.includes(role));
+  const visibleNav = navItems.filter((item) => {
+    if (!item.roles.includes(role)) return false;
+    // ORGANIZATION_ADMIN always sees everything
+    if (role === "ORGANIZATION_ADMIN") return true;
+    // If no permissions set, show all allowed items
+    const perms: string[] = session?.user?.permissions ?? [];
+    if (perms.length === 0) return true;
+    // Map href to permission key
+    const keyMap: Record<string, string> = {
+      "/dashboard":               "dashboard",
+      "/dashboard/users":         "users",
+      "/dashboard/products":      "products",
+      "/dashboard/inventory":     "inventory",
+      "/dashboard/stock":         "stock_view",
+      "/dashboard/sales":         "sales",
+      "/dashboard/sales/history": "sales_history",
+      "/dashboard/sales/pos":     "pos",
+      "/dashboard/reports":       "reports",
+    };
+    const key = keyMap[item.href];
+    return !key || perms.includes(key);
+  });
 
   const isUsersPage = router.pathname === "/platform/users";
   const isProductsPage = router.pathname === "/dashboard/products";

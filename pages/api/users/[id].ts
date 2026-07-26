@@ -29,14 +29,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const updated = await prisma.user.update({
       where: { id },
       data,
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },
     });
     return res.json(updated);
   }
 
   if (req.method === "PATCH") {
-    await prisma.user.update({ where: { id }, data: { isActive: false } });
-    return res.status(204).end();
+    // Deactivate
+    if (req.body?.isActive === false || Object.keys(req.body ?? {}).length === 0) {
+      await prisma.user.update({ where: { id }, data: { isActive: false } });
+      return res.status(204).end();
+    }
+    // Update permissions
+    if (Array.isArray(req.body?.permissions)) {
+      const updated = await prisma.user.update({
+        where: { id },
+        data: { permissions: req.body.permissions },
+        select: { id: true, permissions: true },
+      });
+      return res.json(updated);
+    }
+    return res.status(400).json({ error: "Invalid PATCH body" });
   }
 
   res.setHeader("Allow", ["PUT", "PATCH"]);

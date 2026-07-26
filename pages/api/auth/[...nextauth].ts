@@ -21,18 +21,10 @@ export const authOptions: AuthOptions = {
           include: { organization: true },
         });
 
-        console.log("[auth] email:", credentials.email);
-        console.log("[auth] user found:", !!user);
-        if (user) {
-          console.log("[auth] isActive:", user.isActive);
-          console.log("[auth] hash prefix:", user.password?.slice(0, 10));
-        }
-
         if (!user) throw new Error("Invalid email or password");
         if (!user.isActive) throw new Error("Account is inactive");
 
         const valid = await bcrypt.compare(credentials.password, user.password);
-        console.log("[auth] password valid:", valid);
         if (!valid) throw new Error("Invalid email or password");
 
         return {
@@ -42,6 +34,7 @@ export const authOptions: AuthOptions = {
           role: user.role,
           organizationId:   user.organizationId   ?? undefined,
           organizationName: user.organization?.name ?? undefined,
+          permissions:      (user.permissions as string[]) ?? [],
         };
       },
     }),
@@ -54,6 +47,7 @@ export const authOptions: AuthOptions = {
         token.role           = user.role;
         token.organizationId   = user.organizationId;
         token.organizationName = user.organizationName;
+        token.permissions      = user.permissions;
       }
       return token;
     },
@@ -62,6 +56,7 @@ export const authOptions: AuthOptions = {
       session.user.role           = token.role;
       session.user.organizationId   = token.organizationId;
       session.user.organizationName = token.organizationName;
+      session.user.permissions      = token.permissions;
       return session;
     },
   },

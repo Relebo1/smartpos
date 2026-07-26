@@ -29,8 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "GET") {
     const users = await prisma.user.findMany({
       where: { organizationId: orgId, isActive: true },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },
     });
     return res.json(users);
   }
@@ -53,9 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         role: assignedRole,
         organizationId: orgId,
       },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    });
-    return res.status(201).json(user);
+      select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },
   }
 
   res.setHeader("Allow", ["GET", "POST"]);
