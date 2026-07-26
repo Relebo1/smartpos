@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions, PLATFORM_ROLES } from "../auth/[...nextauth]";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,12 +31,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const data: Record<string, unknown> = { name, email };
     data.role = role;
     if (password) data.password = await bcrypt.hash(password, 10);
-    const updated = await prisma.user.update({
-      where: { id },
-      data,
-      select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },
-    });
-    return res.json(updated);
+    try {
+      const updated = await prisma.user.update({
+        where: { id },
+        data,
+        select: { id: true, name: true, email: true, role: true, permissions: true, createdAt: true },
+      });
+      return res.json(updated);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")
+        return res.status(400).json({ error: "Email already exists" });
+
+      console.error("Unable to update user", error);
+      return res.status(500).json({ error: "Unable to update user. Please try again." });
+    }
   }
 
   if (req.method === "PATCH") {

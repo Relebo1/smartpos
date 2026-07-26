@@ -42,7 +42,7 @@ export default function PlatformUsersPage({ users: initial, orgId: serverOrgId, 
       isEdit ? `/api/users/${editId}` : `/api/users?organizationId=${orgId}`,
       { method: isEdit ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) }
     );
-    const data = await res.json();
+    const data = await res.json().catch(() => ({ error: "Unable to save the user. Please try again." }));
     setLoading(false);
     if (!res.ok) return setError(data.error);
     setUsers(isEdit ? users.map((u) => (u.id === editId ? data : u)) : [data, ...users]);
