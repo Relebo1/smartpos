@@ -3,6 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions, PLATFORM_ROLES } from "../../api/auth/[...nextauth]";
 import { useEffect, useState, useCallback } from "react";
 import { Search, X, Receipt, Banknote, CreditCard, Smartphone, Building, Printer, CheckCircle } from "lucide-react";
+import { printReceipt, downloadReceiptPDF } from "@/lib/receipt";
+import { loadSettings } from "@/lib/hardwareSettings";
 
 type SaleItem = { id: number; name: string; quantity: number; unitPrice: string; discount: string; lineTotal: string };
 type Payment = { method: string; amount: string; reference: string | null };
@@ -63,86 +65,13 @@ export default function SalesHistoryPage({ orgId, orgName, orgAddress, orgPhone 
 
   useEffect(() => { fetchSales(); }, [fetchSales]);
 
+  function getOpts() {
+    const s = loadSettings();
+    return { orgName, orgAddress, orgPhone, paperSize: s.paperSize, footerMessage: s.footerMessage, logoUrl: s.logoUrl, copies: s.printCopies };
+  }
+
   function handlePrint(sale: Sale) {
-    const payment = sale.payments?.[0];
-    const amountPaid = Number(payment?.amount ?? sale.total);
-    const change = payment?.method === "CASH" ? amountPaid - Number(sale.total) : 0;
-    const date = new Date(sale.createdAt);
-    const dateStr = date.toLocaleDateString("en-GB");
-    const timeStr = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
-<title>Receipt ${sale.receiptNumber}</title>
-<style>
-  @page { size: 80mm auto; margin: 0; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Courier New', monospace; font-size: 12px; color: #000; width: 80mm; margin: 0 auto; padding: 8mm 6mm 12mm; }
-  .center { text-align: center; }
-  .store-name { font-size: 18px; font-weight: 700; margin: 4px 0 2px; }
-  .store-sub { font-size: 11px; color: #444; margin-bottom: 2px; }
-  .eq { margin: 8px 0; font-size: 11px; }
-  .meta-row { display: flex; justify-content: center; margin-bottom: 3px; }
-  .meta-label { width: 72px; text-align: right; padding-right: 6px; }
-  .meta-value { width: 100px; }
-  .content { width: 176px; margin: 0 auto; }
-  .item-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
-  .dash { border-top: 1px dashed #000; margin: 8px 0; }
-  .total-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; margin-bottom: 2px; }
-  .tax-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
-  .payment-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
-  .thankyou { text-align: center; font-weight: 700; font-size: 14px; margin: 10px 0 6px; letter-spacing: 1px; }
-  .barcode { text-align: center; margin-top: 6px; }
-  .barcode svg { display: block; margin: 0 auto; width: 160px; height: 40px; }
-</style></head><body>
-<div class="center">
-  <div style="letter-spacing:4px;font-size:11px">* * * * *</div>
-  <div class="store-name">${orgName}</div>
-  ${orgAddress ? `<div class="store-sub">${orgAddress}</div>` : ""}
-  ${orgPhone ? `<div class="store-sub">${orgPhone}</div>` : ""}
-  <div style="letter-spacing:4px;font-size:11px;margin-top:4px">* * * * *</div>
-</div>
-<div style="margin:8px 0 4px">
-  <div class="meta-row"><span class="meta-label">Date:</span><span class="meta-value">${dateStr}</span></div>
-  <div class="meta-row"><span class="meta-label">Cashier:</span><span class="meta-value">${sale.cashier?.name ?? ""}</span></div>
-  ${sale.customer?.name ? `<div class="meta-row"><span class="meta-label">Customer:</span><span class="meta-value">${sale.customer.name}</span></div>` : ""}
-</div>
-<div class="eq center">${"=".repeat(38)}</div>
-<div class="content">
-  ${(sale.items ?? []).map((item) => `
-    <div class="item-row"><span># ${item.name} x${item.quantity}</span><span>${Number(item.lineTotal).toFixed(2)}</span></div>
-    ${Number(item.discount) > 0 ? `<div class="item-row" style="font-size:11px;color:#555"><span>&nbsp;&nbsp;Discount</span><span>-${Number(item.discount).toFixed(2)}</span></div>` : ""}
-  `).join("")}
-  <div class="dash"></div>
-  <div class="total-row"><span>Total</span><span>${Number(sale.total).toFixed(2)}</span></div>
-  ${Number(sale.discount) > 0 ? `<div class="tax-row"><span>Discount</span><span>-${Number(sale.discount).toFixed(2)}</span></div>` : ""}
-  <div class="tax-row"><span>Tax</span><span>${Number(sale.tax ?? 0).toFixed(2)}</span></div>
-  <div class="dash"></div>
-  <div class="payment-row"><span>${(payment?.method ?? "").replace(/_/g, " ")}:</span><span>${amountPaid.toFixed(2)}</span></div>
-  ${change > 0 ? `<div class="payment-row"><span>Change:</span><span>${change.toFixed(2)}</span></div>` : ""}
-  ${payment?.reference ? `<div style="margin-top:3px">#Transaction &nbsp; ${payment.reference}</div>` : ""}
-  <div style="margin-top:3px">${dateStr} &nbsp; ${timeStr}</div>
-  <div style="margin-top:3px">#Receipt &nbsp; ${sale.receiptNumber}</div>
-</div>
-<div class="thankyou">THANK YOU!</div>
-<div class="barcode">
-  <svg viewBox="0 0 200 50" xmlns="http://www.w3.org/2000/svg">
-    ${Array.from({ length: 60 }, (_, i) => {
-      const x = (5 + i * 3.2).toFixed(1);
-      const w = i % 3 === 0 ? 2 : i % 5 === 0 ? 1.5 : 1;
-      const h = i % 7 === 0 ? 50 : 42;
-      return `<rect x="${x}" y="0" width="${w}" height="${h}" fill="#000"/>`;
-    }).join("")}
-  </svg>
-  <div style="font-size:9px;letter-spacing:2px;margin-top:2px">${sale.receiptNumber}</div>
-</div>
-</body></html>`;
-
-    const win = window.open("", "_blank", "width=420,height=750");
-    if (!win) return;
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    setTimeout(() => win.print(), 300);
+    printReceipt(sale, getOpts());
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -231,7 +160,7 @@ export default function SalesHistoryPage({ orgId, orgName, orgAddress, orgPhone 
                   <td className="px-4 py-3">
                     <button onClick={(e) => { e.stopPropagation(); handlePrint(s); }}
                       className="flex items-center gap-1 text-xs text-gray-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition">
-                      <Printer size={13} /> Print
+                      <Printer size={13} /> Reprint
                     </button>
                   </td>
                 </tr>
@@ -297,7 +226,11 @@ export default function SalesHistoryPage({ orgId, orgName, orgAddress, orgPhone 
             <div className="px-5 pb-5 pt-3 border-t border-gray-100 dark:border-slate-700 flex gap-2">
               <button onClick={() => handlePrint(selectedSale)}
                 className="flex-1 flex items-center justify-center gap-2 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-slate-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition">
-                <Printer size={15} /> Print Receipt
+                <Printer size={15} /> Reprint
+              </button>
+              <button onClick={() => downloadReceiptPDF(selectedSale, getOpts())}
+                className="flex-1 flex items-center justify-center gap-2 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-slate-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition">
+                <Printer size={15} /> Download PDF
               </button>
               <button onClick={() => setSelectedSale(null)}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-semibold transition">

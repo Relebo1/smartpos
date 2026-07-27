@@ -154,8 +154,47 @@ async function main() {
 
   console.log("✅ Seeded demo products");
 
+  // ── Pay Lesotho ─────────────────────────────────────────────
+  const payLesotho = await prisma.organization.upsert({
+    where: { id: 3 },
+    update: {},
+    create: {
+      name: "Pay Lesotho",
+      email: "info@paylesotho.co.ls",
+      phone: "+266 5000 0002",
+      address: "Maseru, Lesotho",
+      status: "ACTIVE",
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: "admin@paylesotho.co.ls" },
+    update: {},
+    create: {
+      name: "Pay Lesotho Admin",
+      email: "admin@paylesotho.co.ls",
+      password: await bcrypt.hash("admin123", 10),
+      role: "ORGANIZATION_ADMIN",
+      organizationId: payLesotho.id,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: "cashier@paylesotho.co.ls" },
+    update: {},
+    create: {
+      name: "Pay Lesotho Cashier",
+      email: "cashier@paylesotho.co.ls",
+      password: await bcrypt.hash("cashier123", 10),
+      role: "CASHIER",
+      organizationId: payLesotho.id,
+    },
+  });
+
+  console.log("✅ Seeded Pay Lesotho");
+
   // ── Walk-in customers ────────────────────────────────────────
-  for (const org of [smartMart, oasis]) {
+  for (const org of [smartMart, oasis, payLesotho]) {
     const existing = await prisma.customer.findFirst({
       where: { organizationId: org.id, isWalkIn: true },
     });
@@ -177,8 +216,10 @@ async function main() {
   console.log("  Support Admin: support@smartpos.com  / admin123");
   console.log("  SM Admin     : admin@smartmart.com   / demo123");
   console.log("  SM Cashier   : cashier@smartmart.com / cashier123");
-  console.log("  Oasis Admin  : admin@oasis.com       / demo123");
-  console.log("  Oasis Cashier: cashier@oasis.com     / cashier123");
+  console.log("  Oasis Admin  : admin@oasis.com            / demo123");
+  console.log("  Oasis Cashier: cashier@oasis.com          / cashier123");
+  console.log("  PL Admin     : admin@paylesotho.co.ls     / admin123");
+  console.log("  PL Cashier   : cashier@paylesotho.co.ls   / cashier123");
 }
 
 main().catch(console.error).finally(() => prisma.$disconnect());

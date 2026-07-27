@@ -86,6 +86,11 @@ export default function ProductsPage({ products: initial, orgId: serverOrgId, or
     fetch("/api/categories").then((r) => r.json()).then(setCategories);
   }, []);
 
+  // Pre-fill create form when navigated from POS with an unknown barcode
+  useEffect(() => {
+    if (router.query.newBarcode) openAdd(String(router.query.newBarcode));
+  }, [router.query.newBarcode]);
+
   function openAdd(barcode = "") { setEditId(null); setForm({ ...EMPTY_FORM, barcode }); setImagePreview(""); setError(""); setShowForm(true); }
   function generateBarcode() { setForm((f) => ({ ...f, barcode: Date.now().toString().slice(-13).padStart(13, "0") })); }
   function openEdit(p: Product) {

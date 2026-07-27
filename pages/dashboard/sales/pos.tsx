@@ -1,12 +1,17 @@
 import { GetServerSideProps } from "next";
+import { useRouter } from "next/router";
 import { getServerSession } from "next-auth";
 import { authOptions, PLATFORM_ROLES } from "../../api/auth/[...nextauth]";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Search, ScanBarcode, X, Plus, Minus, ShoppingCart, Trash2, UserCircle, ChevronDown, CheckCircle, Banknote, CreditCard, Smartphone, Building2, Printer, Link2 } from "lucide-react";
+import { Search, ScanBarcode, X, Plus, Minus, ShoppingCart, Trash2, UserCircle, ChevronDown, CheckCircle, Banknote, CreditCard, Smartphone, Building2, Printer, Link2, Settings } from "lucide-react";
 import dynamic from "next/dynamic";
+import { loadSettings, HardwareSettings } from "@/lib/hardwareSettings";
+import { printReceipt, downloadReceiptPDF, buildReceiptHTML } from "@/lib/receipt";
 
 const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), { ssr: false });
 const PhonePairModal = dynamic(() => import("@/components/PhonePairModal"), { ssr: false });
+const HardwareSettingsModal = dynamic(() => import("@/components/HardwareSettingsModal"), { ssr: false });
+const HardwareStatus = dynamic(() => import("@/components/HardwareStatus"), { ssr: false });
 
 type Product = {
   id: number;
@@ -37,6 +42,10 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
   const [completedSale, setCompletedSale] = useState<any>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [phoneToken, setPhoneToken] = useState<string | null>(null);
+  const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null);
+  const [showHwSettings, setShowHwSettings] = useState(false);
+  const [hwSettings, setHwSettings] = useState<HardwareSettings>(() => loadSettings());
+  const router = useRouter();
   const isMobile = typeof window !== "undefined" && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 
   async function openScanner() {
@@ -53,9 +62,11 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
     }
   }
   const searchRef = useRef<HTMLInputElement>(null);
+  const modalOpenRef = useRef(false);
 
   const barcodeBuffer = useRef("");
   const barcodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastKeyTime = useRef(0);
 
   const playSound = useCallback((src: string) => {
     new Audio(src).play().catch(() => {});
@@ -74,9 +85,18 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
         addToCart(data[0]);
         setSearch("");
         setResults([]);
+        setUnknownBarcode(null);
       } else {
-        if (isBarcode) playSound("/sounds/error.mp3");
+        if (isBarcode) {
+          playSound("/sounds/error.mp3");
+          setUnknownBarcode(query);
+        }
         setResults(data);
+      }
+      if (isBarcode) searchRef.current?.focus();
+      // Auto-print if enabled
+      if (isBarcode && data.length === 1 && hwSettings.autoPrint) {
+        // handled in addToCart flow — auto-print fires from ReceiptModal via onSuccess
       }
     },
     [orgId, playSound]
@@ -100,8 +120,23 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
     return () => clearTimeout(t);
   }, [search, fetchProducts]);
 
-  // Global keydown for barcode scanner (keyboard wedge)
+  // Keep modalOpenRef in sync so onBlur's setTimeout always reads current state
   useEffect(() => {
+    modalOpenRef.current = !!(showCustomerModal || showPaymentModal || completedSale || showScanner || phoneToken);
+  }, [showCustomerModal, showPaymentModal, completedSale, showScanner, phoneToken]);
+
+  // Restore focus to search input whenever a modal closes
+  useEffect(() => {
+    if (!showScanner && !showCustomerModal && !showPaymentModal && !completedSale && !phoneToken) {
+      searchRef.current?.focus();
+    }
+  }, [showScanner, showCustomerModal, showPaymentModal, completedSale, phoneToken]);
+
+  // Global keydown for barcode scanner (keyboard wedge) — fires when focus is NOT on an input
+  useEffect(() => {
+    if (!hwSettings.scannerEnabled) return;
+    const timeout = hwSettings.scanTimeout;
+    const needsEnter = hwSettings.requireEnterKey;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -114,12 +149,15 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
       if (e.key.length === 1) {
         barcodeBuffer.current += e.key;
         if (barcodeTimer.current) clearTimeout(barcodeTimer.current);
-        barcodeTimer.current = setTimeout(() => { barcodeBuffer.current = ""; }, 100);
+        barcodeTimer.current = setTimeout(() => {
+          if (!needsEnter && barcodeBuffer.current.length >= 4) fetchProducts(barcodeBuffer.current, true);
+          barcodeBuffer.current = "";
+        }, timeout);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fetchProducts]);
+  }, [fetchProducts, hwSettings.scannerEnabled, hwSettings.scanTimeout, hwSettings.requireEnterKey]);
 
   function addToCart(product: Product) {
     setCart((prev) => {
@@ -153,6 +191,7 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
             <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">Search or scan to add products</p>
           </div>
           <div className="flex items-center gap-2">
+            <HardwareStatus settings={hwSettings} />
             {phoneToken && (
               <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 px-2.5 py-1.5 rounded-lg">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
@@ -183,8 +222,33 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
                 Connect Phone
               </button>
             )}
+            <button
+              onClick={() => setShowHwSettings(true)}
+              className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 px-3 py-1.5 rounded-lg transition"
+            >
+              <Settings size={13} />
+            </button>
           </div>
         </div>
+
+        {/* Scan error */}
+        {unknownBarcode && (
+          <div className="flex items-start justify-between gap-3 px-3 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-600 dark:text-red-400">
+            <div>
+              <p className="font-medium">Barcode: <span className="font-mono tracking-wider">{unknownBarcode}</span></p>
+              <p className="mt-0.5 opacity-80">Product not found</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => router.push(`/dashboard/products?organizationId=${orgId}&newBarcode=${encodeURIComponent(unknownBarcode)}`)}
+                className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg transition font-medium"
+              >
+                Create Product
+              </button>
+              <button onClick={() => setUnknownBarcode(null)} className="hover:text-red-800 dark:hover:text-red-200 transition"><X size={13} /></button>
+            </div>
+          </div>
+        )}
 
         {/* Search input */}
         <div className="relative">
@@ -192,8 +256,46 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
           <input
             ref={searchRef}
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && search.trim()) fetchProducts(search, true); }}
+            onChange={(e) => { setSearch(e.target.value); setUnknownBarcode(null); }}
+            onBlur={(e) => {
+              const next = e.relatedTarget as HTMLElement | null;
+              if (next && (next.tagName === "INPUT" || next.tagName === "TEXTAREA" || next.tagName === "SELECT")) return;
+              setTimeout(() => {
+                if (!modalOpenRef.current) searchRef.current?.focus();
+              }, 50);
+            }}
+            onKeyDown={(e) => {
+              const now = Date.now();
+              const gap = now - lastKeyTime.current;
+              lastKeyTime.current = now;
+              if (gap < hwSettings.scanTimeout) {
+                barcodeBuffer.current += e.key === "Enter" ? "" : e.key;
+                if (barcodeTimer.current) clearTimeout(barcodeTimer.current);
+                if (e.key === "Enter") {
+                  if (barcodeBuffer.current.length >= 4) {
+                    e.preventDefault();
+                    const code = barcodeBuffer.current;
+                    barcodeBuffer.current = "";
+                    setSearch("");
+                    fetchProducts(code, true);
+                  }
+                  barcodeBuffer.current = "";
+                } else {
+                  barcodeTimer.current = setTimeout(() => {
+                    if (!hwSettings.requireEnterKey && barcodeBuffer.current.length >= 4) {
+                      const code = barcodeBuffer.current;
+                      barcodeBuffer.current = "";
+                      setSearch("");
+                      fetchProducts(code, true);
+                    } else {
+                      barcodeBuffer.current = "";
+                    }
+                  }, hwSettings.scanTimeout);
+                }
+                return;
+              }
+              if (e.key === "Enter" && search.trim()) fetchProducts(search, true);
+            }}
             placeholder="Search by name, barcode, or description…"
             autoFocus
             className="w-full pl-9 pr-9 py-2.5 text-sm border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -336,7 +438,19 @@ export default function POSPage({ orgId, orgName, orgAddress, orgPhone }: Props)
           />
         )}
         {completedSale && (
-          <ReceiptModal sale={completedSale} orgName={orgName} orgAddress={orgAddress} orgPhone={orgPhone} onClose={() => setCompletedSale(null)} />
+          <ReceiptModal
+            sale={completedSale}
+            orgName={orgName} orgAddress={orgAddress} orgPhone={orgPhone}
+            hwSettings={hwSettings}
+            onClose={() => setCompletedSale(null)}
+          />
+        )}
+        {showHwSettings && (
+          <HardwareSettingsModal
+            settings={hwSettings}
+            onSave={(s) => setHwSettings(s)}
+            onClose={() => setShowHwSettings(false)}
+          />
         )}
         {showScanner && (
           <BarcodeScanner
@@ -672,131 +786,25 @@ function PaymentModal({
   );
 }
 
-function ReceiptModal({ sale, orgName, orgAddress, orgPhone, onClose }: {
-  sale: any; orgName: string; orgAddress: string | null; orgPhone: string | null; onClose: () => void;
+function ReceiptModal({ sale, orgName, orgAddress, orgPhone, hwSettings, onClose }: {
+  sale: any; orgName: string; orgAddress: string | null; orgPhone: string | null;
+  hwSettings: HardwareSettings; onClose: () => void;
 }) {
+  const opts = { orgName, orgAddress, orgPhone, paperSize: hwSettings.paperSize, footerMessage: hwSettings.footerMessage, logoUrl: hwSettings.logoUrl, copies: hwSettings.printCopies };
   const payment = sale.payments?.[0];
   const amountPaid = Number(payment?.amount ?? sale.total);
   const change = payment?.method === "CASH" ? amountPaid - Number(sale.total) : 0;
   const date = new Date(sale.createdAt);
-  const dateStr = date.toLocaleDateString("en-GB").replace(/\//g, "/");
+  const dateStr = date.toLocaleDateString("en-GB");
   const timeStr = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-  const receiptHTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Receipt ${sale.receiptNumber}</title>
-  <style>
-    @page { size: 80mm auto; margin: 0; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 12px;
-      color: #000;
-      background: #fff;
-      width: 80mm;
-      margin: 0 auto;
-    }
-    .receipt { width: 80mm; padding: 8mm 6mm 12mm; }
-    .center { text-align: center; }
-    .stars { letter-spacing: 4px; font-size: 11px; color: #333; }
-    .store-name { font-size: 20px; font-weight: 700; margin: 4px 0 2px; }
-    .store-sub { font-size: 11px; color: #444; margin-bottom: 2px; }
-    .eq { letter-spacing: 1px; color: #000; margin: 8px 0; font-size: 11px; }
-    .meta-row { display: flex; justify-content: center; margin-bottom: 3px; }
-    .meta-label { width: 72px; text-align: right; padding-right: 6px; }
-    .meta-value { width: 100px; }
-    .item-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
-    .dash { border-top: 1px dashed #000; margin: 8px 0; }
-    .total-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; margin-bottom: 2px; }
-    .tax-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
-    .payment-block { margin-top: 6px; font-size: 12px; }
-    .content { width: 176px; margin: 0 auto; }
-    .thankyou { text-align: center; font-weight: 700; font-size: 14px; margin: 10px 0 6px; letter-spacing: 1px; }
-    .barcode { text-align: center; margin-top: 6px; }
-    .barcode svg { display: block; margin: 0 auto; width: 160px; height: 40px; }
-  </style>
-</head>
-<body>
-<div class="receipt">
-  <div class="center">
-    <div class="stars">*****</div>
-    <div class="store-name">${orgName}</div>
-    ${orgAddress ? `<div class="store-sub">${orgAddress}</div>` : ""}
-    ${orgPhone ? `<div class="store-sub">${orgPhone}</div>` : ""}
-    <div class="stars" style="margin-top:4px">*****</div>
-  </div>
+  // Auto-print on mount if setting is enabled
+  useEffect(() => { if (hwSettings.autoPrint) printReceipt(sale, opts); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  <div style="margin: 8px 0 4px">
-    <div class="meta-row"><span class="meta-label">Date:</span><span class="meta-value">${dateStr}</span></div>
-    <div class="meta-row"><span class="meta-label">Cashier:</span><span class="meta-value">${sale.cashier?.name ?? ""}</span></div>
-    ${sale.customer?.name ? `<div class="meta-row"><span class="meta-label">Customer:</span><span class="meta-value">${sale.customer.name}</span></div>` : ""}
-  </div>
-
-  <div class="eq">${"=".repeat(38)}</div>
-
-  <div class="content">
-  ${(sale.items ?? []).map((item: any) => `
-    <div class="item-row">
-      <span># ${item.name} x${item.quantity}</span>
-      <span>${Number(item.lineTotal).toFixed(2)}</span>
-    </div>
-    ${Number(item.discount) > 0 ? `<div class="item-row" style="font-size:11px;color:#555"><span>&nbsp;&nbsp;Discount</span><span>-${Number(item.discount).toFixed(2)}</span></div>` : ""}
-  `).join("")}
-
-  <div class="dash"></div>
-
-  <div class="total-row"><span>Total</span><span>${Number(sale.total).toFixed(2)}</span></div>
-  ${Number(sale.discount) > 0 ? `<div class="tax-row"><span>Discount</span><span>-${Number(sale.discount).toFixed(2)}</span></div>` : ""}
-  <div class="tax-row"><span>Tax</span><span>${Number(sale.tax ?? 0).toFixed(2)}</span></div>
-
-  <div class="dash"></div>
-
-  <div class="payment-block">
-    <div class="payment-row">
-      <span>${(payment?.method ?? "").replace(/_/g, " ")}:</span>
-      <span>${amountPaid.toFixed(2)}</span>
-    </div>
-    ${change > 0 ? `<div class="payment-row"><span>Change:</span><span>${change.toFixed(2)}</span></div>` : ""}
-    ${payment?.reference ? `<div style="margin-top:3px">#Transaction &nbsp; ${payment.reference}</div>` : ""}
-    <div style="margin-top:3px">${dateStr} &nbsp; ${timeStr}</div>
-    <div style="margin-top:3px">#Receipt &nbsp; ${sale.receiptNumber}</div>
-  </div>
-  </div>
-
-  <div class="thankyou">THANK YOU!</div>
-
-  <div class="barcode">
-    <svg viewBox="0 0 200 50" xmlns="http://www.w3.org/2000/svg">
-      ${Array.from({ length: 60 }, (_, i) => {
-        const x = 5 + i * 3.2;
-        const w = (i % 3 === 0) ? 2 : (i % 5 === 0) ? 1.5 : 1;
-        const h = (i % 7 === 0) ? 50 : 42;
-        return `<rect x="${x.toFixed(1)}" y="0" width="${w}" height="${h}" fill="#000"/>`;
-      }).join("")}
-    </svg>
-    <div style="font-size:9px;letter-spacing:2px;margin-top:2px">${sale.receiptNumber}</div>
-  </div>
-</div>
-</body>
-</html>`;
-
-  function handlePrint() {
-    const win = window.open("", "_blank", "width=420,height=750");
-    if (!win) return;
-    win.document.write(receiptHTML);
-    win.document.close();
-    win.focus();
-    setTimeout(() => win.print(), 300);
-  }
-
-  // ── Preview (modal) ──────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-sm mx-4 flex flex-col max-h-[92vh]" onClick={(e) => e.stopPropagation()}>
 
-        {/* Modal header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-slate-700">
           <div className="flex items-center gap-2">
             <CheckCircle size={18} className="text-green-500" />
@@ -807,125 +815,67 @@ function ReceiptModal({ sale, orgName, orgAddress, orgPhone, onClose }: {
 
         {/* Receipt preview */}
         <div className="flex-1 overflow-y-auto px-4 py-4 bg-gray-100 dark:bg-slate-900">
-          <div
-            className="bg-white mx-auto shadow-lg"
-            style={{
-              maxWidth: 300,
-              fontFamily: "'Courier New', Courier, monospace",
-              fontSize: 12,
-              color: "#000",
-              /* torn-edge top & bottom */
-              clipPath: "polygon(0 8px,8px 0,16px 8px,24px 0,32px 8px,40px 0,48px 8px,56px 0,64px 8px,72px 0,80px 8px,88px 0,96px 8px,104px 0,112px 8px,120px 0,128px 8px,136px 0,144px 8px,152px 0,160px 8px,168px 0,176px 8px,184px 0,192px 8px,200px 0,208px 8px,216px 0,224px 8px,232px 0,240px 8px,248px 0,256px 8px,264px 0,272px 8px,280px 0,288px 8px,296px 0,300px 4px,300px calc(100% - 4px),296px 100%,288px calc(100% - 8px),280px 100%,272px calc(100% - 8px),264px 100%,256px calc(100% - 8px),248px 100%,240px calc(100% - 8px),232px 100%,224px calc(100% - 8px),216px 100%,208px calc(100% - 8px),200px 100%,192px calc(100% - 8px),184px 100%,176px calc(100% - 8px),168px 100%,160px calc(100% - 8px),152px 100%,144px calc(100% - 8px),136px 100%,128px calc(100% - 8px),120px 100%,112px calc(100% - 8px),104px 100%,96px calc(100% - 8px),88px 100%,80px calc(100% - 8px),72px 100%,64px calc(100% - 8px),56px 100%,48px calc(100% - 8px),40px 100%,32px calc(100% - 8px),24px 100%,16px calc(100% - 8px),8px 100%,0 calc(100% - 4px))",
-            }}
-          >
-            <div style={{ padding: "20px 16px 24px" }}>
-
-              {/* Header */}
-              <div style={{ textAlign: "center", marginBottom: 8 }}>
-                <div style={{ letterSpacing: 4, fontSize: 11 }}>*****</div>
-                <div style={{ fontSize: 18, fontWeight: 700, margin: "4px 0 2px" }}>{orgName}</div>
-                {orgAddress && <div style={{ fontSize: 11, color: "#555" }}>{orgAddress}</div>}
-                {orgPhone && <div style={{ fontSize: 11, color: "#555" }}>{orgPhone}</div>}
-                <div style={{ letterSpacing: 4, fontSize: 11, marginTop: 4 }}>*****</div>
+          <div className="bg-white mx-auto shadow-lg" style={{ maxWidth: 300, fontFamily: "'Courier New', Courier, monospace", fontSize: 11, color: "#000", clipPath: "polygon(0 8px,8px 0,16px 8px,24px 0,32px 8px,40px 0,48px 8px,56px 0,64px 8px,72px 0,80px 8px,88px 0,96px 8px,104px 0,112px 8px,120px 0,128px 8px,136px 0,144px 8px,152px 0,160px 8px,168px 0,176px 8px,184px 0,192px 8px,200px 0,208px 8px,216px 0,224px 8px,232px 0,240px 8px,248px 0,256px 8px,264px 0,272px 8px,280px 0,288px 8px,296px 0,300px 4px,300px calc(100% - 4px),296px 100%,288px calc(100% - 8px),280px 100%,272px calc(100% - 8px),264px 100%,256px calc(100% - 8px),248px 100%,240px calc(100% - 8px),232px 100%,224px calc(100% - 8px),216px 100%,208px calc(100% - 8px),200px 100%,192px calc(100% - 8px),184px 100%,176px calc(100% - 8px),168px 100%,160px calc(100% - 8px),152px 100%,144px calc(100% - 8px),136px 100%,128px calc(100% - 8px),120px 100%,112px calc(100% - 8px),104px 100%,96px calc(100% - 8px),88px 100%,80px calc(100% - 8px),72px 100%,64px calc(100% - 8px),56px 100%,48px calc(100% - 8px),40px 100%,32px calc(100% - 8px),24px 100%,16px calc(100% - 8px),8px 100%,0 calc(100% - 4px))" }}>
+            <div style={{ padding: "16px 14px 20px" }}>
+              <div style={{ textAlign: "center", marginBottom: 6 }}>
+                {opts.logoUrl && <img src={opts.logoUrl} style={{ maxWidth: "80%", maxHeight: 36, marginBottom: 4 }} alt="logo" />}
+                <div style={{ letterSpacing: 4, fontSize: 10 }}>* * * * *</div>
+                <div style={{ fontSize: 16, fontWeight: 700, margin: "3px 0 2px" }}>{orgName}</div>
+                {orgAddress && <div style={{ fontSize: 10, color: "#555" }}>{orgAddress}</div>}
+                {orgPhone && <div style={{ fontSize: 10, color: "#555" }}>{orgPhone}</div>}
+                <div style={{ letterSpacing: 4, fontSize: 10, marginTop: 3 }}>* * * * *</div>
               </div>
-
-              {/* Meta */}
-              <div style={{ marginBottom: 4 }}>
-                {[{l:"Date:", v: dateStr}, {l:"Cashier:", v: sale.cashier?.name ?? ""}, ...(sale.customer?.name ? [{l:"Customer:", v: sale.customer.name}] : [])]
-                  .map(({l, v}) => (
-                    <div key={l} style={{ display:"flex", marginBottom: 2 }}>
-                      <span style={{ width: 72 }}>{l}</span>
-                      <span>{v}</span>
-                    </div>
-                  ))}
+              <div style={{ marginBottom: 4, fontSize: 10 }}>
+                {[["Date:", dateStr], ["Time:", timeStr], ["Cashier:", sale.cashier?.name ?? ""], ...(sale.customer?.name && !sale.customer.isWalkIn ? [["Customer:", sale.customer.name]] : [])]
+                  .map(([l, v]) => <div key={l} style={{ display: "flex", marginBottom: 1 }}><span style={{ width: 60 }}>{l}</span><span>{v}</span></div>)}
               </div>
-
-              {/* === divider */}
-              <div style={{ letterSpacing: 1, fontSize: 11, margin: "6px 0" }}>{'='.repeat(34)}</div>
-
-              {/* Items */}
+              <div style={{ fontSize: 10, margin: "5px 0" }}>{'='.repeat(32)}</div>
               {sale.items?.map((item: any) => (
                 <div key={item.id}>
-                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom: 2 }}>
-                    <span># {item.name} x{item.quantity}</span>
-                    <span>{Number(item.lineTotal).toFixed(2)}</span>
-                  </div>
-                  {Number(item.discount) > 0 && (
-                    <div style={{ display:"flex", justifyContent:"space-between", fontSize: 11, color:"#666", marginBottom: 2 }}>
-                      <span>&nbsp;&nbsp;Discount</span><span>-{Number(item.discount).toFixed(2)}</span>
-                    </div>
-                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}><span># {item.name} x{item.quantity}</span><span>{Number(item.lineTotal).toFixed(2)}</span></div>
+                  {Number(item.discount) > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#666", marginBottom: 2 }}><span>&nbsp;&nbsp;Discount</span><span>-{Number(item.discount).toFixed(2)}</span></div>}
                 </div>
               ))}
-
-              {/* Dashed separator */}
-              <div style={{ borderTop:"1px dashed #000", margin:"8px 0" }} />
-
-              {/* Total */}
-              <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700, fontSize:14, marginBottom: 2 }}>
-                <span>Total</span><span>{Number(sale.total).toFixed(2)}</span>
+              <div style={{ borderTop: "1px dashed #000", margin: "6px 0" }} />
+              {Number(sale.discount ?? 0) > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2 }}><span>Discount</span><span>-{Number(sale.discount).toFixed(2)}</span></div>}
+              {Number(sale.tax ?? 0) > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2 }}><span>VAT/Tax</span><span>{Number(sale.tax).toFixed(2)}</span></div>}
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 13, margin: "3px 0" }}><span>TOTAL</span><span>{Number(sale.total).toFixed(2)}</span></div>
+              <div style={{ borderTop: "1px dashed #000", margin: "6px 0" }} />
+              <div style={{ fontSize: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}><span>{(payment?.method ?? "").replace(/_/g, " ")}:</span><span>{amountPaid.toFixed(2)}</span></div>
+                {change > 0 && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}><span>Change:</span><span>{change.toFixed(2)}</span></div>}
+                {payment?.reference && <div style={{ marginTop: 2 }}>#Ref: {payment.reference}</div>}
+                <div style={{ marginTop: 2 }}>#Receipt: {sale.receiptNumber}</div>
               </div>
-              {Number(sale.discount) > 0 && (
-                <div style={{ display:"flex", justifyContent:"space-between", marginBottom: 2 }}>
-                  <span>Discount</span><span>-{Number(sale.discount).toFixed(2)}</span>
-                </div>
-              )}
-              <div style={{ display:"flex", justifyContent:"space-between", marginBottom: 2 }}>
-                <span>Tax</span><span>{Number(sale.tax ?? 0).toFixed(2)}</span>
-              </div>
-
-              {/* Dashed separator */}
-              <div style={{ borderTop:"1px dashed #000", margin:"8px 0" }} />
-
-              {/* Payment */}
-              <div style={{ marginBottom: 4 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", marginBottom: 2 }}>
-                  <span>{(payment?.method ?? "").replace(/_/g, " ")}:</span>
-                  <span>{amountPaid.toFixed(2)}</span>
-                </div>
-                {change > 0 && (
-                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom: 2 }}>
-                    <span>Change:</span><span>{change.toFixed(2)}</span>
-                  </div>
-                )}
-                {payment?.reference && <div style={{ marginTop: 2 }}>#Transaction &nbsp; {payment.reference}</div>}
-                <div style={{ marginTop: 2 }}>{dateStr} &nbsp; {timeStr}</div>
-                <div style={{ marginTop: 2 }}>#Receipt &nbsp; {sale.receiptNumber}</div>
-              </div>
-
-              {/* Thank you */}
-              <div style={{ textAlign:"center", fontWeight:700, fontSize:14, letterSpacing:1, margin:"10px 0 8px" }}>THANK YOU!</div>
-
-              {/* Barcode (SVG) */}
-              <div style={{ textAlign:"center" }}>
-                <svg viewBox="0 0 200 44" width={180} height={44} xmlns="http://www.w3.org/2000/svg" style={{ display:"block", margin:"0 auto" }}>
-                  {Array.from({ length: 60 }, (_, i) => {
-                    const x = 4 + i * 3.2;
-                    const w = i % 3 === 0 ? 2 : i % 5 === 0 ? 1.5 : 1;
-                    const h = i % 7 === 0 ? 44 : 36;
-                    return <rect key={i} x={x} y={0} width={w} height={h} fill="#000" />;
-                  })}
+              <div style={{ textAlign: "center", fontWeight: 700, fontSize: 12, letterSpacing: 1, margin: "8px 0 6px" }}>{opts.footerMessage}</div>
+              <div style={{ textAlign: "center" }}>
+                <svg viewBox="0 0 200 36" width={160} height={36} xmlns="http://www.w3.org/2000/svg" style={{ display: "block", margin: "0 auto" }}>
+                  {Array.from({ length: 55 }, (_, i) => { const x = 4 + i * 3.5; const w = i % 3 === 0 ? 2 : i % 5 === 0 ? 1.5 : 1; const h = i % 7 === 0 ? 36 : 28; return <rect key={i} x={x} y={0} width={w} height={h} fill="#000" />; })}
                 </svg>
-                <div style={{ fontSize: 9, letterSpacing: 2, marginTop: 2 }}>{sale.receiptNumber}</div>
+                <div style={{ fontSize: 8, letterSpacing: 2, marginTop: 2 }}>{sale.receiptNumber}</div>
               </div>
-
             </div>
           </div>
         </div>
 
-        {/* Actions */}
+        {/* Actions: Preview / Print / Download PDF */}
         <div className="px-5 pb-5 pt-3 border-t border-gray-100 dark:border-slate-700 flex gap-2">
           <button
-            onClick={handlePrint}
-            className="flex-1 flex items-center justify-center gap-2 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-slate-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition"
+            onClick={() => printReceipt(sale, opts)}
+            className="flex-1 flex items-center justify-center gap-1.5 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-slate-200 py-2.5 rounded-xl text-xs font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition"
           >
-            <Printer size={15} /> Print / Save PDF
+            <Printer size={13} /> Print
           </button>
-          <button onClick={onClose} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-sm font-semibold transition">
+          <button
+            onClick={() => downloadReceiptPDF(sale, opts)}
+            className="flex-1 flex items-center justify-center gap-1.5 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-slate-200 py-2.5 rounded-xl text-xs font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition"
+          >
+            <Printer size={13} /> Download PDF
+          </button>
+          <button onClick={onClose} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-xl text-xs font-semibold transition">
             New Sale
           </button>
         </div>
-
       </div>
     </div>
   );
