@@ -38,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         quantity,
         referenceNumber,
         notes,
-        performedBy: session.user.name,
+        performedBy: session.user.name ?? session.user.email ?? "System",
       },
     }),
   ]);

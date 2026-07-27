@@ -106,74 +106,73 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (walkIn) resolvedCustomerId = walkIn.id;
     }
 
-    // Atomic transaction
-    const sale = await prisma.$transaction(async (tx) => {
-      const created = await tx.sale.create({
-        data: {
-          organizationId: orgId,
-          cashierId: Number(session.user.id),
-          customerId: resolvedCustomerId,
-          receiptNumber,
-          subtotal,
-          discount: discountAmt,
-          tax: taxAmt,
-          total,
-          notes: notes || null,
-          items: {
-            create: items.map((item: any) => {
-              const product = products.find((p) => p.id === item.productId)!;
-              const lineDiscount = Number(item.discount ?? 0);
-              const lineTotal = Number(product.sellingPrice) * item.quantity - lineDiscount;
-              return {
-                productId: item.productId,
-                name: product.name,
-                quantity: item.quantity,
-                unitPrice: product.sellingPrice,
-                discount: lineDiscount,
-                lineTotal,
-              };
-            }),
-          },
-          payments: {
-            create: {
-              organizationId: orgId,
-              method: paymentMethod,
-              amount: paid,
-              reference: paymentReference || null,
-            },
-          },
-        },
-        include: {
-          items: true,
-          payments: true,
-          customer: { select: { name: true } },
-          cashier: { select: { name: true } },
-        },
-      });
+    const cashierId = Number(session.user.id);
+    const performedBy = session.user.name ?? session.user.email ?? "System";
 
-      // Deduct stock + create inventory transactions
-      for (const item of items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { quantity: { decrement: item.quantity } },
-        });
-        await tx.inventoryTransaction.create({
-          data: {
+    // Create sale
+    const created = await prisma.sale.create({
+      data: {
+        organizationId: orgId,
+        cashierId,
+        customerId: resolvedCustomerId,
+        receiptNumber,
+        subtotal,
+        discount: discountAmt,
+        tax: taxAmt,
+        total,
+        notes: notes || null,
+        items: {
+          create: items.map((item: any) => {
+            const product = products.find((p) => p.id === item.productId)!;
+            const lineDiscount = Number(item.discount ?? 0);
+            const lineTotal = Number(product.sellingPrice) * item.quantity - lineDiscount;
+            return {
+              productId: item.productId,
+              name: product.name,
+              quantity: item.quantity,
+              unitPrice: product.sellingPrice,
+              discount: lineDiscount,
+              lineTotal,
+            };
+          }),
+        },
+        payments: {
+          create: {
             organizationId: orgId,
-            productId: item.productId,
-            type: "SALE",
-            quantity: item.quantity,
-            referenceNumber: receiptNumber,
-            notes: `Sale ${receiptNumber}`,
-            performedBy: session.user.name,
+            method: paymentMethod,
+            amount: paid,
+            reference: paymentReference || null,
           },
-        });
-      }
-
-      return created;
+        },
+      },
+      include: {
+        items: true,
+        payments: true,
+        customer: { select: { name: true } },
+        cashier: { select: { name: true } },
+      },
     });
 
-    return res.status(201).json(sale);
+    // Deduct stock + inventory transactions (sequential, no interactive tx needed)
+    for (const item of items) {
+      await prisma.product.update({
+        where: { id: item.productId },
+        data: { quantity: { decrement: item.quantity } },
+      });
+      await prisma.inventoryTransaction.create({
+        data: {
+          organizationId: orgId,
+          productId: item.productId,
+          type: "SALE",
+          quantity: item.quantity,
+          referenceNumber: receiptNumber,
+          notes: `Sale ${receiptNumber}`,
+          performedBy,
+        },
+      });
+    }
+
+    return res.status(201).json(created);
   }
 
   res.setHeader("Allow", ["GET", "POST"]);
