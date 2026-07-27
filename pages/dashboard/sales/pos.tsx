@@ -678,28 +678,33 @@ function PaymentModal({
   async function handleSubmit() {
     setError("");
     setSubmitting(true);
-    const res = await fetch("/api/sales", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customerId,
-        organizationId: orgId,
-        discount,
-        tax: taxAmt,
-        paymentMethod: method,
-        amountPaid: paid,
-        paymentReference: reference || null,
-        items: cart.map((i) => ({
-          productId: i.id,
-          quantity: i.qty,
-          discount: i.itemDiscount,
-        })),
-      }),
-    });
-    const data = await res.json();
-    setSubmitting(false);
-    if (!res.ok) { setError(data.error || "Payment failed"); return; }
-    onSuccess(data);
+    try {
+      const res = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId,
+          organizationId: orgId,
+          discount,
+          tax: taxAmt,
+          paymentMethod: method,
+          amountPaid: paid,
+          paymentReference: reference || null,
+          items: cart.map((i) => ({
+            productId: i.id,
+            quantity: i.qty,
+            discount: i.itemDiscount,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Payment failed"); return; }
+      onSuccess(data);
+    } catch (err) {
+      setError("Network error. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (

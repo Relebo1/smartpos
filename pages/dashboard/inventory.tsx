@@ -1,7 +1,7 @@
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions, PLATFORM_ROLES } from "../api/auth/[...nextauth]";
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useRef, useCallback, FormEvent } from "react";
 import { useRouter } from "next/router";
 import { Search, AlertTriangle, PackageX, Package, DollarSign, ScanBarcode, Link2 } from "lucide-react";
 import Pagination from "@/components/Pagination";
@@ -67,6 +67,9 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
   const [scanTarget, setScanTarget] = useState<"receive" | "adjust" | null>(null);
   const [scanError, setScanError] = useState("");
   const [phoneScanTarget, setPhoneScanTarget] = useState<"receive" | "adjust" | null>(null);
+  const hidBuffer = useRef("");
+  const hidTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hidTarget = useRef<"receive" | "adjust" | null>(null);
 
   const phoneScanner = usePhoneScanner(orgId, (barcode) => {
     const found = items.find((i) => i.barcode === barcode);
@@ -91,7 +94,7 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const HISTORY_PAGE_SIZE = 20;
+  const [historyPageSize, setHistoryPageSize] = useState(20);
 
   useEffect(() => {
     setItems(initial);
@@ -100,15 +103,23 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
     setTab("inventory");
   }, [initial, serverOrgName]);
 
+  // Re-fetch inventory when org changes client-side (platform org switcher)
+  useEffect(() => {
+    if (!orgId || orgId === serverOrgId) return;
+    fetch(`/api/inventory?organizationId=${orgId}`)
+      .then((r) => r.json())
+      .then((data) => setItems(data.map((p: any) => ({ ...p, buyingPrice: p.buyingPrice.toString(), sellingPrice: p.sellingPrice.toString() }))));
+  }, [orgId, serverOrgId]);
+
   useEffect(() => {
     if (tab !== "history") return;
     setHistoryLoading(true);
-    const skip = (historyPage - 1) * HISTORY_PAGE_SIZE;
-    fetch(`/api/inventory/history?organizationId=${orgId}&take=${HISTORY_PAGE_SIZE}&skip=${skip}`)
+    const skip = (historyPage - 1) * historyPageSize;
+    fetch(`/api/inventory/history?organizationId=${orgId}&take=${historyPageSize}&skip=${skip}`)
       .then((r) => r.json())
       .then((d) => { setHistory(d.transactions); setHistoryTotal(d.total); })
       .finally(() => setHistoryLoading(false));
-  }, [tab, historyPage, orgId]);
+  }, [tab, historyPage, historyPageSize, orgId]);
 
   // Summary stats
   const totalProducts = items.length;
@@ -125,38 +136,94 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
   });
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
 
+  const openReceive = useCallback((item: InventoryItem) => {
+    setScanError(""); setReceiveItem(item); setReceiveError(""); setReceiveForm({ quantity: "", referenceNumber: "", notes: "" });
+  }, []);
+
+  const openAdjust = useCallback((item: InventoryItem) => {
+    setScanError(""); setAdjustItem(item); setAdjustError(""); setAdjustForm({ adjustmentType: "DECREASE", quantity: "", reason: "Damaged", notes: "" });
+  }, []);
+
+  // HID (USB/Bluetooth) barcode scanner listener
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = hidTarget.current;
+      if (!target) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "Enter") {
+        const code = hidBuffer.current.replace(/[\x00-\x1F\x7F]+/g, "").trim();
+        hidBuffer.current = "";
+        if (hidTimer.current) clearTimeout(hidTimer.current);
+        if (code.length < 4) return;
+        const found = items.find((i) => i.barcode === code);
+        if (!found) { setScanError(`No product found for barcode "${code}"`); return; }
+        setScanError("");
+        if (target === "receive") openReceive(found);
+        else openAdjust(found);
+        return;
+      }
+      if (e.key.length === 1) {
+        hidBuffer.current += e.key;
+        if (hidTimer.current) clearTimeout(hidTimer.current);
+        hidTimer.current = setTimeout(() => {
+          const code = hidBuffer.current.replace(/[\x00-\x1F\x7F]+/g, "").trim();
+          hidBuffer.current = "";
+          if (code.length < 4) return;
+          const found = items.find((i) => i.barcode === code);
+          if (!found) { setScanError(`No product found for barcode "${code}"`); return; }
+          setScanError("");
+          if (target === "receive") openReceive(found);
+          else openAdjust(found);
+        }, 100);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [items, openReceive, openAdjust]);
+
   async function handleReceive(e: FormEvent) {
     e.preventDefault();
     if (!receiveItem) return;
     setReceiveError(""); setReceiveLoading(true);
-    const res = await fetch(`/api/inventory/receive?organizationId=${orgId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId: receiveItem.id, quantity: Number(receiveForm.quantity), referenceNumber: receiveForm.referenceNumber, notes: receiveForm.notes }),
-    });
-    const data = await res.json();
-    setReceiveLoading(false);
-    if (!res.ok) return setReceiveError(data.error);
-    setItems(items.map((i) => i.id === receiveItem.id ? { ...i, quantity: data.quantity } : i));
-    setReceiveItem(null);
-    setReceiveForm({ quantity: "", referenceNumber: "", notes: "" });
+    try {
+      const res = await fetch(`/api/inventory/receive?organizationId=${orgId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: receiveItem.id, quantity: Number(receiveForm.quantity), referenceNumber: receiveForm.referenceNumber, notes: receiveForm.notes }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setReceiveError(data.error); return; }
+      setItems(items.map((i) => i.id === receiveItem.id ? { ...i, quantity: data.quantity } : i));
+      setReceiveItem(null);
+      setReceiveForm({ quantity: "", referenceNumber: "", notes: "" });
+    } catch {
+      setReceiveError("Network error. Please try again.");
+    } finally {
+      setReceiveLoading(false);
+    }
   }
 
   async function handleAdjust(e: FormEvent) {
     e.preventDefault();
     if (!adjustItem) return;
     setAdjustError(""); setAdjustLoading(true);
-    const res = await fetch(`/api/inventory/adjust?organizationId=${orgId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId: adjustItem.id, adjustmentType: adjustForm.adjustmentType, quantity: Number(adjustForm.quantity), reason: adjustForm.reason, notes: adjustForm.notes }),
-    });
-    const data = await res.json();
-    setAdjustLoading(false);
-    if (!res.ok) return setAdjustError(data.error);
-    setItems(items.map((i) => i.id === adjustItem.id ? { ...i, quantity: data.quantity } : i));
-    setAdjustItem(null);
-    setAdjustForm({ adjustmentType: "DECREASE", quantity: "", reason: "Damaged", notes: "" });
+    try {
+      const res = await fetch(`/api/inventory/adjust?organizationId=${orgId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: adjustItem.id, adjustmentType: adjustForm.adjustmentType, quantity: Number(adjustForm.quantity), reason: adjustForm.reason, notes: adjustForm.notes }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setAdjustError(data.error); return; }
+      setItems(items.map((i) => i.id === adjustItem.id ? { ...i, quantity: data.quantity } : i));
+      setAdjustItem(null);
+      setAdjustForm({ adjustmentType: "DECREASE", quantity: "", reason: "Damaged", notes: "" });
+    } catch {
+      setAdjustError("Network error. Please try again.");
+    } finally {
+      setAdjustLoading(false);
+    }
   }
 
   return (
@@ -169,13 +236,13 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => { setScanError(""); setScanTarget("receive"); }}
+            onClick={() => { setScanError(""); hidTarget.current = "receive"; setScanTarget("receive"); }}
             className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-lg transition"
           >
             <ScanBarcode size={15} /> Scan to Receive
           </button>
           <button
-            onClick={() => { setScanError(""); setScanTarget("adjust"); }}
+            onClick={() => { setScanError(""); hidTarget.current = "adjust"; setScanTarget("adjust"); }}
             className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-lg transition"
           >
             <ScanBarcode size={15} /> Scan to Adjust
@@ -187,13 +254,13 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
               </span>
             )}
             <button
-              onClick={() => { setScanError(""); setPhoneScanTarget("receive"); phoneScanner.connect(); }}
+              onClick={() => { setScanError(""); hidTarget.current = "receive"; setPhoneScanTarget("receive"); phoneScanner.connect(); }}
               className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-lg transition"
             >
               <Link2 size={15} /> Phone Receive
             </button>
             <button
-              onClick={() => { setScanError(""); setPhoneScanTarget("adjust"); phoneScanner.connect(); }}
+              onClick={() => { setScanError(""); hidTarget.current = "adjust"; setPhoneScanTarget("adjust"); phoneScanner.connect(); }}
               className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-lg transition"
             >
               <Link2 size={15} /> Phone Adjust
@@ -290,11 +357,11 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          <button onClick={() => { setReceiveItem(item); setReceiveError(""); setReceiveForm({ quantity: "", referenceNumber: "", notes: "" }); }}
+                          <button onClick={() => openReceive(item)}
                             className="px-3 py-1 text-xs font-medium text-green-600 dark:text-green-400 border border-green-200 dark:border-green-700 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/30 transition">
                             Receive
                           </button>
-                          <button onClick={() => { setAdjustItem(item); setAdjustError(""); setAdjustForm({ adjustmentType: "DECREASE", quantity: "", reason: "Damaged", notes: "" }); }}
+                          <button onClick={() => openAdjust(item)}
                             className="px-3 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-700 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/30 transition">
                             Adjust
                           </button>
@@ -346,7 +413,7 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
               })}
             </tbody>
           </table>
-          <Pagination total={historyTotal} page={historyPage} pageSize={HISTORY_PAGE_SIZE} onPageChange={setHistoryPage} onPageSizeChange={() => {}} />
+          <Pagination total={historyTotal} page={historyPage} pageSize={historyPageSize} onPageChange={setHistoryPage} onPageSizeChange={(s) => { setHistoryPageSize(s); setHistoryPage(1); }} />
         </div>
       )}
 
@@ -356,15 +423,12 @@ export default function InventoryPage({ items: initial, orgId: serverOrgId, orgN
             const found = items.find((i) => i.barcode === barcode);
             const target = scanTarget;
             setScanTarget(null);
+            hidTarget.current = null;
             if (!found) { setScanError(`No product found for barcode "${barcode}"`); return; }
-            setScanError("");
-            if (target === "receive") {
-              setReceiveItem(found); setReceiveError(""); setReceiveForm({ quantity: "", referenceNumber: "", notes: "" });
-            } else {
-              setAdjustItem(found); setAdjustError(""); setAdjustForm({ adjustmentType: "DECREASE", quantity: "", reason: "Damaged", notes: "" });
-            }
+            if (target === "receive") openReceive(found);
+            else openAdjust(found);
           }}
-          onClose={() => setScanTarget(null)}
+          onClose={() => { setScanTarget(null); hidTarget.current = null; }}
         />
       )}
       {phoneScanner.token && (

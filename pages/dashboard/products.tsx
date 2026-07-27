@@ -56,9 +56,18 @@ export default function ProductsPage({ products: initial, orgId: serverOrgId, or
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [showScanner, setShowScanner] = useState(false);
+  const [formScanner, setFormScanner] = useState(false);
   const [scanMiss, setScanMiss] = useState<string | null>(null);
   const [viewProduct, setViewProduct] = useState<Product | null>(null);
   const [printProduct, setPrintProduct] = useState<Product | null>(null);
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const barcodeBuffer = useRef("");
+  const barcodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function sanitizeBarcode(raw: string) {
+    // Strip trailing/leading control characters (\r, \n, non-printable)
+    return raw.replace(/[\x00-\x1F\x7F]+/g, "").trim();
+  }
 
   function handleScannedBarcode(barcode: string) {
     const found = products.find((p) => p.barcode === barcode);
@@ -129,7 +138,7 @@ export default function ProductsPage({ products: initial, orgId: serverOrgId, or
     const res = await fetch(url, {
       method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, quantity: Number(form.quantity), minimumStock: Number(form.minimumStock) }),
+      body: JSON.stringify({ ...form, barcode: sanitizeBarcode(form.barcode), quantity: Number(form.quantity), minimumStock: Number(form.minimumStock) }),
     });
     const data = await res.json();
     setLoading(false);
@@ -246,10 +255,40 @@ export default function ProductsPage({ products: initial, orgId: serverOrgId, or
             <div>
               <label className={labelCls}>Barcode</label>
               <div className="flex gap-2">
-                <input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} className={inputCls} placeholder="6001234567890" />
+                <input
+                  ref={barcodeInputRef}
+                  value={form.barcode}
+                  onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                  onKeyDown={(e) => {
+                    const now = Date.now();
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const clean = sanitizeBarcode(barcodeBuffer.current || form.barcode);
+                      barcodeBuffer.current = "";
+                      if (barcodeTimer.current) clearTimeout(barcodeTimer.current);
+                      if (clean) setForm((f) => ({ ...f, barcode: clean }));
+                      return;
+                    }
+                    if (e.key.length === 1) {
+                      barcodeBuffer.current += e.key;
+                      if (barcodeTimer.current) clearTimeout(barcodeTimer.current);
+                      barcodeTimer.current = setTimeout(() => {
+                        const clean = sanitizeBarcode(barcodeBuffer.current);
+                        barcodeBuffer.current = "";
+                        if (clean) setForm((f) => ({ ...f, barcode: clean }));
+                      }, 100);
+                    }
+                  }}
+                  className={inputCls}
+                  placeholder="6001234567890"
+                />
                 <button type="button" onClick={generateBarcode} title="Generate barcode"
                   className="shrink-0 px-2.5 border border-gray-300 dark:border-slate-600 rounded-lg text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 transition">
                   <RefreshCw size={14} />
+                </button>
+                <button type="button" onClick={() => setFormScanner(true)} title="Scan with camera"
+                  className="shrink-0 px-2.5 border border-gray-300 dark:border-slate-600 rounded-lg text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 transition">
+                  <ScanBarcode size={14} />
                 </button>
               </div>
             </div>
@@ -388,6 +427,12 @@ export default function ProductsPage({ products: initial, orgId: serverOrgId, or
         <BarcodeScanner
           onDetected={(barcode) => { setShowScanner(false); handleScannedBarcode(barcode); }}
           onClose={() => setShowScanner(false)}
+        />
+      )}
+      {formScanner && (
+        <BarcodeScanner
+          onDetected={(barcode) => { setFormScanner(false); setForm((f) => ({ ...f, barcode: sanitizeBarcode(barcode) })); }}
+          onClose={() => setFormScanner(false)}
         />
       )}
       {phoneScanner.token && (
